@@ -5,20 +5,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import segmenter.vision_transformer
 
 class Encoder(nn.Module):
 
     def __init__(self, backbone: str):
-        self.model = timm.create_model(backbone, pretrained=True)
+        self.model = timm.create_model(backbone, pretrained=True) # vit_small_patch16_224
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """ Custom forward because timm vit implementation has no way to turn off pooling """
         x = self.model.patch_embed(x)
-        cls_token = self.model.cls_token.expand(x.shape[0], -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
-        if self.model.dist_token is None:
-            x = torch.cat((cls_token, x), dim=1)
-        else:
-            x = torch.cat((cls_token, self.model.dist_token.expand(x.shape[0], -1, -1), x), dim=1)
         x = self.model.pos_drop(x + self.model.pos_embed)
         x = self.model.blocks(x)
         x = self.model.norm(x)
@@ -50,17 +46,11 @@ class MaskTransformer(nn.Module):
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         b = x.shape[0]
-
-        # Concatenate class tokens
         cls_tokens = self.cls_tokens.repeat(b, 1, 1)
-        x = torch.cat([x, cls_tokens], dim=1)
-
+        x = torch.cat([cls_tokens, x], dim=1)
         x = self.transformer(x)
-
-        # Separate class tokens
-        z = x[:, :-self.num_classes, :]
-        c = x[:, -self.num_classes:, :]
-
+        c = x[:, :self.num_classes]
+        z = x[:, self.num_classes:]
         return z, c
 
 
@@ -77,7 +67,7 @@ class Segmenter(nn.Module):
 
     def __init__(
         self,
-        backbone: str, # vit_base_patch16_224
+        backbone: str,
         num_classes: int,
         image_size: int,
         patch_size: int,
@@ -100,6 +90,6 @@ class Segmenter(nn.Module):
     def forward(self, x: torch.Tensor):
         x = self.encoder(x)
         z, c = self.mask_transformer(x)
-        masks = torch.einsum("bcd, bnd -> bnc", c, z)
+        masks = z @ c.transpose(1, 2)
         masks = torch.softmax(masks / self.scale, dim=-1)
         return self.upsample(masks)
