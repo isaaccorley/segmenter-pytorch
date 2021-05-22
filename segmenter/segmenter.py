@@ -4,21 +4,9 @@ import timm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops.layers.torch import Rearrange
 
 import segmenter.vision_transformer
-
-class Encoder(nn.Module):
-
-    def __init__(self, backbone: str):
-        self.model = timm.create_model(backbone, pretrained=True) # vit_small_patch16_224
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """ Custom forward because timm vit implementation has no way to turn off pooling """
-        x = self.model.patch_embed(x)
-        x = self.model.pos_drop(x + self.model.pos_embed)
-        x = self.model.blocks(x)
-        x = self.model.norm(x)
-        return x
 
 
 class MaskTransformer(nn.Module):
@@ -56,11 +44,14 @@ class MaskTransformer(nn.Module):
 
 class Upsample(nn.Module):
 
-    def __init__(self):
-        pass
+    def __init__(self, image_size: int, patch_size: Tuple[int, int]):
+        self.model = nn.Sequential(
+            Rearrange("b (p1 p2) c -> b c p1 p2", p1=image_size//patch_size[0], p2=image_size//patch_size[1]),
+            nn.Upsample(scale_factor=patch_size, mode="bilinear")
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        pass
+        return self.model(x)
 
 
 class Segmenter(nn.Module):
@@ -70,13 +61,13 @@ class Segmenter(nn.Module):
         backbone: str,
         num_classes: int,
         image_size: int,
-        patch_size: int,
         emb_dim: int,
         hidden_dim: int,
         num_layers: int,
         num_heads: int,
     ):
-        self.encoder = Encoder(backbone)
+        self.encoder = timm.create_model(backbone, img_size=image_size, pretrained=True)
+        patch_size = self.encoder.patch_embed.patch_size
         self.mask_transformer = MaskTransformer(
             num_classes,
             emb_dim,
@@ -84,7 +75,7 @@ class Segmenter(nn.Module):
             num_layers,
             num_heads,
         )
-        self.upsample = Upsample()
+        self.upsample = Upsample(image_size, patch_size)
         self.scale = emb_dim ** -0.5
 
     def forward(self, x: torch.Tensor):
