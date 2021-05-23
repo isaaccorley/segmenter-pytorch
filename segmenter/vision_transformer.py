@@ -19,8 +19,8 @@ class VisionTransformer(timm.models.vision_transformer.VisionTransformer):
             x = torch.cat((cls_token, self.dist_token.expand(x.shape[0], -1, -1), x), dim=1)
         x = self.pos_drop(x + self.pos_embed)
         x = self.blocks(x)
-        x = self.norm(x)
         """
+        x = self.norm(x)
         if self.dist_token is None:
             return self.pre_logits(x[:, 0])
         else:
